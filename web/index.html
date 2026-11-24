@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Habla la bala</title>
+  <link rel="icon" href="/web/bala.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/web/estilos.css">
+  <script src="/web/app.js" defer></script>
+</head>
+<body>
+  <section id="portada" class="portada">
+    <div class="portada-texto">
+      <p class="portada-lugar">Tlatelolco, Ciudad de México</p>
+      <h1>Habla<br>la bala</h1>
+      <p class="portada-nota">Fue disparada el 2 de octubre de 1968. Desde entonces está guardada como evidencia. Pregúntele lo que sabe.</p>
+      <button id="comenzar" class="boton boton-negro" type="button">Comenzar el interrogatorio</button>
+      <p class="portada-firma">Creado por Pipe Ortega</p>
+    </div>
+    <img class="portada-bala" src="/web/bala.svg" alt="">
+    <p class="portada-fecha" aria-hidden="true">2 oct 68</p>
+  </section>
+
+  <div id="parte" class="parte" hidden>
+    <header class="cabecera">
+      <p class="cabecera-titulo">Parte de novedades</p>
+      <button id="abrir-panel" class="boton boton-claro solo-angosto" type="button" aria-controls="panel" aria-expanded="false">Expedientes</button>
+    </header>
+
+    <main class="hoja">
+      <dl class="datos">
+        <div><dt>Folio</dt><dd id="folio"></dd></div>
+        <div><dt>Declarante</dt><dd id="declarante"></dd></div>
+        <div><dt>Lugar de los hechos</dt><dd>Plaza de las Tres Culturas, Tlatelolco</dd></div>
+        <div><dt>Fecha de los hechos</dt><dd>2 de octubre de 1968</dd></div>
+        <div><dt>Interrogatorio</dt><dd id="fecha"></dd></div>
+      </dl>
+      <p id="vacio" class="vacio">Sin novedades que reportar. En espera de las preguntas del civil.</p>
+      <div id="mensajes"></div>
+      <p id="estado" class="lector" role="status"></p>
+      <p class="firma">Así mi reporte.<span id="firma"></span></p>
+      <div class="acciones">
+        <button id="nueva" class="boton" type="button">Archivar y abrir nueva parte</button>
+        <button id="actualizar" class="boton" type="button">Actualizar expedientes</button>
+      </div>
+    </main>
+
+    <aside id="panel" class="panel" aria-label="Expedientes">
+      <div class="panel-cabeza">
+        <h2>Expedientes <span id="total"></span></h2>
+        <button id="cerrar-panel" class="boton solo-angosto" type="button">Cerrar</button>
+      </div>
+      <label class="lector" for="buscar">Buscar expediente</label>
+      <input id="buscar" type="search" placeholder="Buscar por nombre o dato" autocomplete="off">
+      <ul id="lista"></ul>
+      <button id="ver-mapa" class="boton" type="button" hidden>Ver mapa de lugares</button>
+    </aside>
+
+    <form id="forma" class="forma">
+      <label class="lector" for="pregunta">Su pregunta</label>
+      <textarea id="pregunta" rows="1" maxlength="4000" placeholder="Escriba su pregunta, civil"></textarea>
+      <button id="enviar" class="boton boton-rojo" type="submit">Preguntar</button>
+    </form>
+  </div>
+
+  <dialog id="visor" aria-labelledby="visor-nombre">
+    <div class="visor-cabeza">
+      <h2 id="visor-nombre"></h2>
+      <button id="cerrar-visor" class="boton" type="button">Cerrar</button>
+    </div>
+    <div id="visor-cuerpo" class="visor-cuerpo"></div>
+  </dialog>
+</body>
+</html>

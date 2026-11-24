@@ -13,6 +13,7 @@ import time
 import unicodedata
 
 import gspread
+import httpx
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
@@ -26,6 +27,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 NOMBRE_HOJA = os.getenv("NOMBRE_HOJA")
 RUTA_CREDENCIALES = os.getenv("RUTA_CREDENCIALES", "credenciales.json")
 PESTANA_FICHAS = os.getenv("PESTANA_FICHAS", "Fichas")  # pestaña con las fichas de personas
+PESTANA_LUGARES = os.getenv("PESTANA_LUGARES", "Lugares")     # pestaña con hospitales, panteones, etc.
+PESTANA_IMAGENES = os.getenv("PESTANA_IMAGENES", "Imagenes")  # pestaña con las imágenes de cada persona
 CARPETA_ESCANEOS = os.getenv("CARPETA_ESCANEOS", "")     # carpeta de Drive con los escaneos
 MODELO = os.getenv("MODELO", "gemini-3.5-flash")
 
@@ -76,9 +79,9 @@ def cargar_personajes(nombre_hoja):
     return personajes
 
 
-def limpiar_filas(filas):
+def limpiar_filas(filas, obligatoria="nombre"):
     """Limpia espacios, pasa los encabezados a minúsculas, ignora celdas vacías
-    y descarta las filas que no tienen 'nombre'."""
+    y descarta las filas que no tienen la columna obligatoria."""
     limpias = []
     for fila in filas:
         registro = {
@@ -86,7 +89,7 @@ def limpiar_filas(filas):
             for columna, valor in fila.items()
             if str(valor).strip()
         }
-        if registro.get("nombre"):
+        if registro.get(obligatoria):
             limpias.append(registro)
     return limpias
 
@@ -102,12 +105,28 @@ def cargar_fichas(nombre_hoja, pestana=PESTANA_FICHAS):
 
     Si la pestaña no existe, regresa una lista vacía (el personaje funciona sin fichas).
     """
+    return cargar_pestana(nombre_hoja, pestana)
+
+
+def cargar_lugares(nombre_hoja, pestana=PESTANA_LUGARES):
+    """Lee la pestaña de lugares. 'coordenadas' es opcional ("19.4514, -99.1371")
+    y sirve para dibujar el mapa."""
+    return cargar_pestana(nombre_hoja, pestana)
+
+
+def cargar_imagenes(nombre_hoja, pestana=PESTANA_IMAGENES):
+    """Lee la pestaña de imágenes: cada fila es un archivo y la persona a la que pertenece."""
+    return cargar_pestana(nombre_hoja, pestana, obligatoria="archivo")
+
+
+def cargar_pestana(nombre_hoja, pestana, obligatoria="nombre"):
+    """Lee una pestaña opcional del Sheet; si no existe, regresa una lista vacía."""
     gc = gspread.service_account(filename=RUTA_CREDENCIALES)
     try:
         hoja = gc.open(nombre_hoja).worksheet(pestana)
     except gspread.exceptions.WorksheetNotFound:
         return []
-    return limpiar_filas(hoja.get_all_records())
+    return limpiar_filas(hoja.get_all_records(), obligatoria)
 
 
 #%%
@@ -167,6 +186,31 @@ def buscar_escaneo(ficha, escaneos):
     return escaneos.get(normalizar(ficha["nombre"]))
 
 
+def buscar_imagenes(ficha, imagenes, escaneos):
+    """Regresa las imágenes de una persona, sin repetir: [{id, tipo, descripcion, procedencia}].
+    Primero va su ficha escaneada y después las de la pestaña de imágenes.
+    Las de tipo 'mapa' se omiten: la app dibuja su propio mapa."""
+    encontradas = {}
+    principal = buscar_escaneo(ficha, escaneos)
+    if principal:
+        encontradas[principal] = {"id": principal}
+    for fila in imagenes:
+        if normalizar(fila.get("persona", "")) != normalizar(ficha["nombre"]):
+            continue
+        if normalizar(fila.get("tipo", "")) == "mapa":
+            continue
+        if fila.get("imagen"):
+            id_archivo = id_de_drive(fila["imagen"])
+        else:
+            id_archivo = escaneos.get(normalizar(os.path.splitext(fila["archivo"])[0]))
+        if id_archivo:
+            encontradas[id_archivo] = {
+                "id": id_archivo,
+                **{c: fila[c] for c in ("tipo", "descripcion", "procedencia") if fila.get(c)},
+            }
+    return list(encontradas.values())
+
+
 def descargar_de_drive(id_archivo):
     """Descarga el contenido (bytes) de un archivo de Drive."""
     respuesta = sesion_drive().get(
@@ -196,6 +240,7 @@ if __name__ == "__main__":
     print(personaje)
 
     fichas = cargar_fichas(NOMBRE_HOJA)
+    lugares = cargar_lugares(NOMBRE_HOJA)
     print(f"Fichas cargadas de la pestaña '{PESTANA_FICHAS}': {len(fichas)}")
 
 # %%
@@ -209,8 +254,8 @@ def formatear_datos(registro, excluir=()):
     )
 
 
-def construir_prompt(personaje, fichas=None):
-    """Crea el prompt del personaje a partir de sus datos y, si hay, de las fichas."""
+def construir_prompt(personaje, fichas=None, lugares=None):
+    """Crea el prompt del personaje a partir de sus datos y, si hay, de las fichas y los lugares."""
     nombre = personaje["nombre"]
 
     # Columnas extra del Sheet (obras, frases_celebres, etc.) se agregan solas
@@ -258,9 +303,26 @@ Son tu ÚNICA fuente de información sobre personas específicas.
 - Cuando hables de una persona concreta, usa solo lo que dice su expediente.
 - Si te preguntan por alguien que no tiene expediente, o por un dato que no aparece en él, dilo claramente (por ejemplo: "ese dato no consta en mis expedientes"). Nunca lo inventes ni lo adivines.
 - No atribuyas a personas reales actos, culpas o frases que no estén en su expediente.
-- Si un expediente indica que algo es incierto o está en disputa, preséntalo así.
+- Si un expediente indica que algo es incierto o está en disputa, preséntalo así, con todas sus versiones.
+- Si un dato aparece con fuente pendiente, acláralo al mencionarlo.
+- Nunca digas ni insinúes que tú heriste o mataste a una persona de los expedientes: no consta qué bala fue.
+- No describas lesiones ni autopsias por iniciativa propia: solo si te lo preguntan, en pocas palabras y con sobriedad.
 - Si el expediente incluye fuentes, puedes citarlas cuando te pregunten de dónde sale la información.
 - Cada vez que tu respuesta use información del expediente de una persona, agrega al final, en una línea aparte, la marca [[ANEXO: nombre]] con el nombre exacto como aparece en el título del expediente (una línea por persona). Nunca pongas esa marca para personas sin expediente.
+"""
+
+    if lugares:
+        sitios = "\n\n".join(
+            f"### Lugar: {lugar['nombre']}\n{formatear_datos(lugar, excluir={'nombre', 'coordenadas'})}"
+            for lugar in lugares
+        )
+        prompt += f"""
+## Lugares
+{sitios}
+
+## Reglas sobre los lugares
+- Las distancias y los tiempos son mediciones actuales, no de 1968. Acláralo si los mencionas.
+- Respeta lo que aparezca como duda. No inventes rutas ni traslados.
 """
 
     return prompt.strip()
@@ -283,12 +345,15 @@ def texto_visible(texto):
 
 
 if __name__ == "__main__":
-    prompt = construir_prompt(personaje, fichas)
+    prompt = construir_prompt(personaje, fichas, lugares)
     print(prompt)
 
 
 # %%
 #Paso 4:Conectar con Gemini y su API
+ESPERA_MODELO = 40  # segundos sin respuesta antes de probar con otro modelo
+
+
 def crear_cliente_gemini(api_key):
     """Crea un cliente de Gemini con la API Key proporcionada."""
     if not api_key:
@@ -297,7 +362,10 @@ def crear_cliente_gemini(api_key):
     # de eso se encarga responder() probando otros modelos (Paso 4.2)
     return genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        http_options=types.HttpOptions(
+            timeout=ESPERA_MODELO * 1000,  # en milisegundos
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
     )
 
 
@@ -373,15 +441,17 @@ def responder(cliente, prompt, historial, mensaje, avisar=print):
                     if pedazo.text:
                         partes.append(pedazo.text)
                         yield pedazo.text
-            except errors.APIError as e:
-                if e.code not in ERRORES_TEMPORALES:
+            except (errors.APIError, httpx.TransportError) as e:
+                # TransportError = se acabó el tiempo de espera o se cortó la conexión
+                codigo = getattr(e, "code", "sin respuesta")
+                if isinstance(e, errors.APIError) and codigo not in ERRORES_TEMPORALES:
                     raise
                 if partes:
                     # Falló a media respuesta: se descarta lo que llevaba
-                    avisar(f"{modelo} se interrumpió ({e.code}). Repitiendo la respuesta con otro modelo...")
+                    avisar(f"{modelo} se interrumpió ({codigo}). Repitiendo la respuesta con otro modelo...")
                     yield REINICIAR
                 else:
-                    avisar(f"{modelo} no está disponible ({e.code}). Probando con otro modelo...")
+                    avisar(f"{modelo} no está disponible ({codigo}). Probando con otro modelo...")
                 continue
 
             if partes:
