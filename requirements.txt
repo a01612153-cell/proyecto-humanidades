@@ -1,4 +1,6 @@
 google-genai
 gspread
 python-dotenv
-streamlit
+httpx
+fastapi
+uvicorn
